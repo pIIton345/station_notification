@@ -4,6 +4,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultContainer = document.getElementById('resultContainer');
     const stationList = document.getElementById('stationList');
 
+    // Monitoring Elements
+    const monitoringOverlay = document.getElementById('monitoringOverlay');
+    const targetNameEl = document.getElementById('targetName');
+    const targetDistanceEl = document.getElementById('targetDistance');
+    const cancelMonitoringBtn = document.getElementById('cancelMonitoringBtn');
+
+    let wakeLock = null;
+    let watchId = null;
+    let targetStation = null;
+
     getLocationBtn.addEventListener('click', () => {
         if (!navigator.geolocation) {
             updateStatus('お使いのブラウザは位置情報をサポートしていません。', 'error');
@@ -18,6 +28,8 @@ document.addEventListener('DOMContentLoaded', () => {
         navigator.geolocation.getCurrentPosition(successCallback, errorCallback);
     });
 
+    cancelMonitoringBtn.addEventListener('click', stopMonitoring);
+
     function successCallback(position) {
         const latitude = position.coords.latitude;
         const longitude = position.coords.longitude;
@@ -28,7 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function errorCallback(error) {
         getLocationBtn.disabled = false;
-        switch(error.code) {
+        switch (error.code) {
             case error.PERMISSION_DENIED:
                 updateStatus('位置情報の利用が許可されませんでした。', 'error');
                 break;
@@ -45,8 +57,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function fetchStations(lat, long) {
-        // HeartRails Express API
-        // http://express.heartrails.com/api.html
         const url = `https://express.heartrails.com/api/json?method=getStations&x=${long}&y=${lat}`;
 
         try {
@@ -63,7 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             displayStations(data.response.station);
-            updateStatus('検索完了！', 'success');
+            updateStatus('駅が見つかりました。ベルボタンを押して通知を設定できます。', 'success');
             getLocationBtn.disabled = false;
 
         } catch (error) {
@@ -74,25 +84,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function displayStations(stations) {
-        // API might return a single object instead of array if only 1 result
         const stationArray = Array.isArray(stations) ? stations : [stations];
-
         stationList.innerHTML = '';
-        
+
         stationArray.forEach((station, index) => {
             const li = document.createElement('li');
             li.className = 'station-item';
-            li.style.animationDelay = `${index * 0.05}s`; // Staggered animation
+            li.style.animationDelay = `${index * 0.05}s`;
 
             li.innerHTML = `
                 <div class="station-info">
                     <span class="station-name">${station.name}駅</span>
                     <span class="station-line">${station.line}</span>
                 </div>
-                <div class="station-distance">
-                    ${station.distance}m
+                <div class="station-actions">
+                    <div class="station-distance">${station.distance}m</div>
+                    <button class="icon-button" aria-label="${station.name}駅に到着したら通知する">
+                        🔔
+                    </button>
                 </div>
             `;
+
+            // Notification Button Click Handler
+            const bellBtn = li.querySelector('button');
+            bellBtn.addEventListener('click', () => startMonitoring(station));
+
             stationList.appendChild(li);
         });
 
@@ -101,7 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateStatus(message, type) {
         statusMessage.textContent = message;
-        statusMessage.className = 'status-message'; // Reset classes
+        statusMessage.className = 'status-message';
         if (type === 'error') {
             statusMessage.style.color = '#ef4444';
         } else if (type === 'success') {
@@ -109,5 +125,116 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             statusMessage.style.color = '#64748b';
         }
+    }
+
+    // --- Monitoring & Notification Logic ---
+
+    async function startMonitoring(station) {
+        // Request Notification Permission
+        if (Notification.permission !== "granted") {
+            const permission = await Notification.requestPermission();
+            if (permission !== "granted") {
+                alert("通知を受け取るために権限を許可してください。");
+                return;
+            }
+        }
+
+        targetStation = station;
+        targetNameEl.textContent = station.name + '駅';
+        monitoringOverlay.classList.remove('hidden');
+
+        // Request Wake Lock
+        try {
+            if ('wakeLock' in navigator) {
+                wakeLock = await navigator.wakeLock.request('screen');
+            }
+        } catch (err) {
+            console.error('Wake Lock failed:', err);
+        }
+
+        // Start Watching Position
+        if (navigator.geolocation) {
+            watchId = navigator.geolocation.watchPosition(
+                checkProximity,
+                (err) => console.error(err),
+                {
+                    enableHighAccuracy: true,
+                    timeout: 5000,
+                    maximumAge: 0
+                }
+            );
+        }
+    }
+
+    function stopMonitoring() {
+        if (watchId !== null) {
+            navigator.geolocation.clearWatch(watchId);
+            watchId = null;
+        }
+        if (wakeLock !== null) {
+            wakeLock.release();
+            wakeLock = null;
+        }
+        monitoringOverlay.classList.add('hidden');
+        targetStation = null;
+    }
+
+    function checkProximity(position) {
+        if (!targetStation) return;
+
+        const currentLat = position.coords.latitude;
+        const currentLng = position.coords.longitude;
+
+        // Calculate Distance using Haversine Formula
+        // Note: The API returns stations with x(long) and y(lat)
+        const distance = getDistanceFromLatLonInM(
+            currentLat,
+            currentLng,
+            targetStation.y,
+            targetStation.x
+        );
+
+        targetDistanceEl.textContent = Math.round(distance) + 'm';
+
+        // Trigger if closer than 500m (adjust as needed)
+        if (distance < 500) {
+            triggerAlarm();
+        }
+    }
+
+    function triggerAlarm() {
+        // Vibrate
+        if (navigator.vibrate) {
+            navigator.vibrate([1000, 500, 1000]);
+        }
+
+        // Notification
+        new Notification("もうすぐ到着します！", {
+            body: `${targetStation.name}駅まであと${targetDistanceEl.textContent}`,
+            icon: "https://cdn-icons-png.flaticon.com/512/1063/1063305.png"
+        });
+
+        // Optional: Stop monitoring after trigger to avoid spam
+        // stopMonitoring(); 
+        // Or just alert once:
+        // alert(`${targetStation.name}駅に近づきました！`);
+    }
+
+    // Helper: Haversine Formula for distance
+    function getDistanceFromLatLonInM(lat1, lon1, lat2, lon2) {
+        const R = 6371000; // Radius of the earth in m
+        const dLat = deg2rad(lat2 - lat1);
+        const dLon = deg2rad(lon2 - lon1);
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        const d = R * c; // Distance in m
+        return d;
+    }
+
+    function deg2rad(deg) {
+        return deg * (Math.PI / 180);
     }
 });
