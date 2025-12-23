@@ -92,7 +92,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const mockStation = {
             name: "localhost (テスト)",
             line: "デバッグ線",
-            distance: 600, // Starts outside the 500m zone
+            distance: 5, // Starts outside the 500m zone
             x: 0,
             y: 0,
             isMock: true
