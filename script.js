@@ -66,19 +66,20 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const data = await response.json();
 
-            if (!data.response || !data.response.station) {
-                updateStatus('近くに駅が見つかりませんでした。', 'error');
-                getLocationBtn.disabled = false;
-                return;
-            }
 
-            displayStations(data.response.station);
+            if (data.response && data.response.station) {
+                displayStations(data.response.station);
+            } else {
+                displayStations([]); // Pass empty to just show the test station
+            }
             updateStatus('駅が見つかりました。ベルボタンを押して通知を設定できます。', 'success');
             getLocationBtn.disabled = false;
 
         } catch (error) {
             console.error('Error fetching stations:', error);
-            updateStatus('駅情報の取得に失敗しました。', 'error');
+            // Even on error, show the test station
+            displayStations([]);
+            updateStatus('駅情報の取得に失敗しましたが、テスト用駅を表示します。', 'warning');
             getLocationBtn.disabled = false;
         }
     }
@@ -86,6 +87,17 @@ document.addEventListener('DOMContentLoaded', () => {
     function displayStations(stations) {
         const stationArray = Array.isArray(stations) ? stations : [stations];
         stationList.innerHTML = '';
+
+        // Add Mock Station for Testing
+        const mockStation = {
+            name: "localhost (テスト)",
+            line: "デバッグ線",
+            distance: 600, // Starts outside the 500m zone
+            x: 0,
+            y: 0,
+            isMock: true
+        };
+        stationArray.unshift(mockStation);
 
         stationArray.forEach((station, index) => {
             const li = document.createElement('li');
@@ -152,8 +164,26 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Wake Lock failed:', err);
         }
 
-        // Start Watching Position
-        if (navigator.geolocation) {
+        // Start Watching
+        if (station.isMock) {
+            // Simulation Mode
+            let currentDistance = 600; // Start at 600m
+            targetDistanceEl.textContent = currentDistance + 'm';
+
+            watchId = setInterval(() => {
+                currentDistance -= 10; // Decrease by 10m every tick
+                targetDistanceEl.textContent = currentDistance + 'm';
+
+                if (currentDistance < 500) {
+                    triggerAlarm();
+                    // Stop simulation after trigger to prevent spam in this demo
+                    clearInterval(watchId);
+                    watchId = null;
+                }
+            }, 1000); // Update every 1 second
+
+        } else if (navigator.geolocation) {
+            // Real GPS Mode
             watchId = navigator.geolocation.watchPosition(
                 checkProximity,
                 (err) => console.error(err),
@@ -167,10 +197,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function stopMonitoring() {
-        if (watchId !== null) {
-            navigator.geolocation.clearWatch(watchId);
-            watchId = null;
+        if (targetStation && targetStation.isMock) {
+            if (watchId !== null) {
+                clearInterval(watchId);
+                watchId = null;
+            }
+        } else {
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
         }
+
         if (wakeLock !== null) {
             wakeLock.release();
             wakeLock = null;

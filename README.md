@@ -1,1 +1,2 @@
-# station_notification
+# station_notification  
+アルファ版
